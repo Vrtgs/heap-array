@@ -421,6 +421,19 @@ impl<T> HeapArray<T> {
     pub fn from_raw_parts(ptr: NonNull<T>, len: usize) -> Self {
         Self { ptr, len }
     }
+
+    pub(crate) unsafe fn dealloc(&mut self) {
+        if self.len != 0 {
+            // size is always less than isize::MAX we checked that already
+            // By using Layout::array::<T> to allocate
+            let size = mem::size_of::<T>().wrapping_mul(self.len);
+            let align = mem::align_of::<T>();
+            unsafe {
+                let layout = Layout::from_size_align_unchecked(size, align);
+                dealloc(self.ptr.as_ptr().cast(), layout)
+            }
+        }
+    }
 }
 impl<T> Default for HeapArray<T> {
     #[inline]
@@ -495,6 +508,37 @@ impl<T> From<HeapArray<T>> for Box<[T]> {
     }
 }
 
+
+impl<T, const N: usize> TryFrom<HeapArray<T>> for [T; N] {
+    type Error = HeapArray<T>;
+
+    fn try_from(value: HeapArray<T>) -> Result<Self, Self::Error> {
+        if value.len != N {
+            return Err(value)
+        }
+
+        let mut value = ManuallyDrop::new(value);
+        let data = unsafe { ptr::read(value.as_ptr() as *const [T; N]) };
+        unsafe { value.dealloc(); }
+
+        Ok(data)
+    }
+}
+
+impl<T, const N: usize> TryFrom<HeapArray<T>> for Box<[T; N]> {
+    type Error = HeapArray<T>;
+
+    fn try_from(value: HeapArray<T>) -> Result<Self, Self::Error> {
+        if value.len != N {
+            Err(value)
+        } else {
+            let value = ManuallyDrop::new(value);
+            // SAFETY: we literally just checked if value.len != N
+            Ok(unsafe { Box::from_raw(value.ptr.as_ptr() as *mut [T; N]) })
+        }
+    }
+}
+
 impl<T> Deref for HeapArray<T> {
     type Target = [T];
 
@@ -553,14 +597,7 @@ impl<T> Drop for HeapArray<T> {
         unsafe {
             ptr::drop_in_place(ptr::slice_from_raw_parts_mut(self.ptr.as_ptr(), self.len));
 
-            if self.len != 0 {
-                // size is always less than isize::MAX we checked that already
-                // By using Layout::array::<T> to allocate
-                let size = mem::size_of::<T>().wrapping_mul(self.len);
-                let align = mem::align_of::<T>();
-                let layout = Layout::from_size_align_unchecked(size, align);
-                dealloc(self.ptr.as_ptr().cast(), layout)
-            }
+            self.dealloc()
         }
     }
 }
@@ -655,6 +692,8 @@ impl<T: Serialize> Serialize for HeapArray<T> {
 #[cfg(feature = "serde")]
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        use core::marker::PhantomData;
+
         struct HeapArrayVisitor<T> {
             marker: PhantomData<T>,
         }
