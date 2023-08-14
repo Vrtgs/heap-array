@@ -643,9 +643,8 @@ unsafe fn alloc_uninnit<T>(len: usize) -> Option<NonNull<MaybeUninit<T>>> {
 #[cfg(feature = "serde")]
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
-    de::{SeqAccess, Visitor}
+    de::{SeqAccess, Visitor, Error, Expected},
 };
-use serde::de::{Error, Expected};
 
 #[cfg(feature = "serde")]
 impl<T: Serialize> Serialize for HeapArray<T> {
