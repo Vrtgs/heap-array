@@ -36,7 +36,6 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec, alloc::{alloc, dealloc, handle_alloc_error}, vec::IntoIter, vec};
 use core::{mem, ptr::{self, NonNull}, fmt::{Debug, Formatter}, mem::{ManuallyDrop, MaybeUninit}, ops::{Deref, DerefMut}, panic::{RefUnwindSafe, UnwindSafe}, alloc::Layout, fmt};
 use core::cmp::Ordering;
-use core::marker::PhantomData;
 use core::ops::ControlFlow;
 use core::slice::{Iter, IterMut};
 use likely_stable::{unlikely};
@@ -728,7 +727,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
 /// ```
 /// # use heap_array::heap_array;
 /// let v = heap_array![1; 3];
-/// assert_eq!(v, [1, 1, 1]);
+/// assert_eq!(*v, [1, 1, 1]);
 /// ```
 ///
 /// Note that unlike array expressions this syntax supports all elements
