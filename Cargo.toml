@@ -1,0 +1,18 @@
+[package]
+name = "heap-array"
+version = "0.1.0"
+edition = "2021"
+authors = ["NightMare-Vortex"]
+description = "An Implementation of a variable length array, with its main benefit over `Vec` is taking up less space"
+license = "MIT"
+repository = "https://github.com/NightMare-Vortex/array-vec/tree/master"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version="1", optional = true }
+likely_stable = "0.1.2"
