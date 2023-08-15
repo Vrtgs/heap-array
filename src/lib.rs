@@ -36,7 +36,6 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec, alloc::{alloc, dealloc, handle_alloc_error}, vec::IntoIter, vec};
 use core::{mem, ptr::{self, NonNull}, fmt::{Debug, Formatter}, mem::{ManuallyDrop, MaybeUninit}, ops::{Deref, DerefMut}, panic::{RefUnwindSafe, UnwindSafe}, alloc::Layout, fmt};
 use core::cmp::Ordering;
-use core::fmt::Write;
 use core::ops::ControlFlow;
 use core::slice::{Iter, IterMut};
 use likely_stable::{unlikely};
