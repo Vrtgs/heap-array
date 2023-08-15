@@ -358,7 +358,8 @@ impl<T> HeapArray<T> {
     ///
     /// ```
     /// use std::io::{self, Read};
-    /// let mut buffer = vec![0; 3];
+    /// # use heap_array::heap_array;
+    /// let mut buffer = heap_array![0; 3];
     /// io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();
     /// ```
     #[inline(always)]
