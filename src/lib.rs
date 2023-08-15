@@ -36,6 +36,7 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec, alloc::{alloc, dealloc, handle_alloc_error}, vec::IntoIter, vec};
 use core::{mem, ptr::{self, NonNull}, fmt::{Debug, Formatter}, mem::{ManuallyDrop, MaybeUninit}, ops::{Deref, DerefMut}, panic::{RefUnwindSafe, UnwindSafe}, alloc::Layout, fmt};
 use core::cmp::Ordering;
+use core::fmt::Write;
 use core::ops::ControlFlow;
 use core::slice::{Iter, IterMut};
 use likely_stable::{unlikely};
@@ -100,7 +101,7 @@ impl<T> HeapArray<T> {
     #[inline]
     pub const fn is_empty(&self) -> bool { self.len == 0 }
 
-    /// Returns the number of elements in the array-vec, also referred to
+    /// Returns the number of elements in the heap-array, also referred to
     /// as its 'length'.
     ///
     /// # Examples
@@ -158,7 +159,7 @@ impl<T> HeapArray<T> {
         self.into()
     }
 
-    /// Creates an [`HeapArray`], where each element `T` is the returned value from `cb`
+    /// Creates a [`HeapArray`], where each element `T` is the returned value from `cb`
     /// using that element's index.
     ///
     /// # Arguments
@@ -187,7 +188,7 @@ impl<T> HeapArray<T> {
     pub fn from_fn(len: usize, f: impl FnMut(usize) -> T) -> Self {
         Self::try_from_fn(len, NeverShortCircuit::wrap_fn(f))
     }
-    /// Creates an [`HeapArray`], where each element `T` is the returned value from `cb`
+    /// Creates a [`HeapArray`], where each element `T` is the returned value from `cb`
     /// using that element's index.
     /// Unlike [`from_fn`], where the element creation can't fail, this version will return an error
     /// if any element creation was unsuccessful.
@@ -240,7 +241,7 @@ impl<T> HeapArray<T> {
         R::from_element(unsafe { guard.into_heap_array_unchecked() })
     }
 
-    /// Create an [`HeapArray`] from a given element and size.
+    /// Create a [`HeapArray`] from a given element and size.
     ///
     ///
     /// This is a specialization of `HeapArray::from_fn(len, |_| element.clone())`
@@ -248,7 +249,7 @@ impl<T> HeapArray<T> {
     ///
     /// This will use `clone` to duplicate an expression, so one should be careful
     /// using this with types having a nonstandard `Clone` implementation. For
-    /// example, `Self::from_element(5, Rc::new(1))` will create a array-vec of five references
+    /// example, `Self::from_element(5, Rc::new(1))` will create a heap-array of five references
     /// to the same boxed integer value, not five references pointing to independently
     /// boxed integers.
     ///
@@ -275,10 +276,10 @@ impl<T> HeapArray<T> {
         // as well as avoid an extra copy (caused by not using element except for cloning)
         vec![element; len].into()
     }
-    /// Returns an unsafe mutable pointer to the array-vec's buffer, or a dangling
-    /// raw pointer valid for zero sized reads if the array-vec didn't allocate.
+    /// Returns an unsafe mutable pointer to the heap-array's buffer, or a dangling
+    /// raw pointer valid for zero sized reads if the heap-array didn't allocate.
     ///
-    /// The caller must ensure that the array-vec outlives the pointer this
+    /// The caller must ensure that the heap-array outlives the pointer this
     /// function returns, or else it will end up pointing to garbage.
     /// making any pointers to it invalid.
     ///
@@ -301,12 +302,12 @@ impl<T> HeapArray<T> {
         // `deref_mut`, which creates an intermediate reference.
         self.ptr.as_ptr()
     }
-    /// Returns a raw pointer to the array-vec's buffer, or a dangling raw pointer
-    /// valid for zero sized reads if the array-vec didn't allocate.
+    /// Returns a raw pointer to the heap-array's buffer, or a dangling raw pointer
+    /// valid for zero sized reads if the heap-array didn't allocate.
     ///
-    /// The caller must ensure that the array-vec outlives the pointer this
+    /// The caller must ensure that the heap-array outlives the pointer this
     /// function returns, or else it will end up pointing to garbage.
-    /// Modifying the array-vec may cause its buffer to be reallocated,
+    /// Modifying the heap-array may cause its buffer to be reallocated,
     /// which would also make any pointers to it invalid.
     ///
     /// The caller must also ensure that the memory the pointer (non-transitively) points to
@@ -357,10 +358,10 @@ impl<T> HeapArray<T> {
         let mut this = ManuallyDrop::new(self);
         unsafe { core::slice::from_raw_parts_mut(this.as_mut_ptr(), this.len) }
     }
-    /// Decomposes an [`HeapArray`] into its raw components.
+    /// Decomposes a [`HeapArray`] into its raw components.
     ///
     /// Returns the raw pointer to the underlying data, the length of
-    /// the array-vec (in elements) These are the same arguments in the same
+    /// the heap-array (in elements) These are the same arguments in the same
     /// order as the arguments to [`from_raw_parts`].
     ///
     /// After calling this function, the caller is responsible for the
@@ -392,7 +393,7 @@ impl<T> HeapArray<T> {
         let this = ManuallyDrop::new(self);
         (this.ptr, this.len)
     }
-    /// Composes an [`HeapArray`] from its raw components.
+    /// Composes a [`HeapArray`] from its raw components.
     ///
     /// After calling this function, the [`HeapArray`] is responsible for the
     /// memory management. The only way to get this back and get back
@@ -421,17 +422,21 @@ impl<T> HeapArray<T> {
     pub fn from_raw_parts(ptr: NonNull<T>, len: usize) -> Self {
         Self { ptr, len }
     }
-
+    
+    
+    // Safety: Caller must up hold
+    // only call on a Non empty HeapArray
+    // Must ensure the HeapArray wont be dropped afterwards
+    // and that it wont be accessed later
     pub(crate) unsafe fn dealloc(&mut self) {
         if self.len != 0 {
             // size is always less than isize::MAX we checked that already
             // By using Layout::array::<T> to allocate
             let size = mem::size_of::<T>().wrapping_mul(self.len);
             let align = mem::align_of::<T>();
-            unsafe {
-                let layout = Layout::from_size_align_unchecked(size, align);
-                dealloc(self.ptr.as_ptr().cast(), layout)
-            }
+
+            let layout = Layout::from_size_align_unchecked(size, align);
+            dealloc(self.ptr.as_ptr().cast(), layout)
         }
     }
 }
@@ -444,36 +449,30 @@ impl<T> Default for HeapArray<T> {
 
 impl<T: Clone> From<&[T]> for HeapArray<T> {
     fn from(values: &[T]) -> Self {
-        let len = values.len();
-
-        let ptr = match unsafe { alloc_uninnit::<T>(len) } {
-            Some(ptr) => ptr.cast(),
-            None => return Self::new()
-        };
-
-        let mut p = ptr.as_ptr();
-        for value in values {unsafe {
-            ptr::write(p, value.clone());
-            p = p.add(1);
-        }}
-
-        Self { ptr, len }
+        HeapArray::from_fn(values.len(), |i| unsafe {
+            // Safety: from_fn provides values 0..len
+            // and all values gotten should be within that range
+            match cfg!(debug_asserions) {
+                true => {values.get(i).expect("HeapArray cloning out of bounds").clone()}
+                false => {values.get_unchecked(i).clone()}
+            }
+        })
     }
 }
 impl<T, const N: usize> From<[T; N]> for HeapArray<T> {
     fn from(values: [T; N]) -> Self {
         let ptr = match unsafe { alloc_uninnit::<T>(N) } {
-            Some(ptr) => ptr.cast(),
+            Some(ptr) => ptr,
             None => return Self::new()
         };
 
-        let mut p = ptr.as_ptr();
+        let mut p = ptr.as_ptr() as *mut T;
         for value in values {unsafe {
             ptr::write(p, value);
             p = p.add(1);
         }}
 
-        Self { ptr, len: N }
+        Self { ptr: ptr.cast(), len: N }
     }
 }
 
@@ -517,8 +516,15 @@ impl<T, const N: usize> TryFrom<HeapArray<T>> for [T; N] {
             return Err(value)
         }
 
+        if N == 0 {
+            // Safety: N is 0, and so *const [T; N] is *const [T; 0]
+            return Ok(unsafe { ptr::read((&[]) as *const [T; N]) })
+        }
+
         let mut value = ManuallyDrop::new(value);
         let data = unsafe { ptr::read(value.as_ptr() as *const [T; N]) };
+        // Safety: value is a ManuallyDrop and so it wort be dropped
+        // and since we take ownership of value it wont be accessed after this
         unsafe { value.dealloc(); }
 
         Ok(data)
@@ -597,7 +603,9 @@ impl<T> Drop for HeapArray<T> {
         unsafe {
             ptr::drop_in_place(ptr::slice_from_raw_parts_mut(self.ptr.as_ptr(), self.len));
 
-            self.dealloc()
+            if !self.is_empty() {
+                self.dealloc()
+            }
         }
     }
 }
@@ -775,7 +783,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
 ///
 /// This will use `clone` to duplicate an expression, so one should be careful
 /// using this with types having a nonstandard `Clone` implementation. For
-/// example, `heap_array![Rc::new(1); 5]` will create a array-vec of five references
+/// example, `heap_array![Rc::new(1); 5]` will create a heap-array of five references
 /// to the same boxed integer value, not five references pointing to independently
 /// boxed integers.
 ///
