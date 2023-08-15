@@ -1,6 +1,6 @@
 [package]
 name = "heap-array"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["NightMare-Vortex"]
 description = "An Implementation of a variable length array, with its main benefit over `Vec` is taking up less space"

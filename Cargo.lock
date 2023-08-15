@@ -10,7 +10,7 @@ checksum = "fbdcdcb6d86f71c5e97409ad45898af11cbc995b4ee8112d59095a28d376c935"
 
 [[package]]
 name = "heap-array"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "likely_stable",
  "serde",

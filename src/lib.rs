@@ -36,6 +36,7 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec, alloc::{alloc, dealloc, handle_alloc_error}, vec::IntoIter, vec};
 use core::{mem, ptr::{self, NonNull}, fmt::{Debug, Formatter}, mem::{ManuallyDrop, MaybeUninit}, ops::{Deref, DerefMut}, panic::{RefUnwindSafe, UnwindSafe}, alloc::Layout, fmt};
 use core::cmp::Ordering;
+use core::mem::forget;
 use core::ops::ControlFlow;
 use core::slice::{Iter, IterMut};
 use likely_stable::{unlikely};
@@ -296,6 +297,7 @@ impl<T> HeapArray<T> {
     /// }
     /// assert_eq!(*arr, [0, 1, 2, 3, 4, 5]);
     /// ```
+    #[inline(always)]
     pub fn as_mut_ptr(&mut self) -> *mut T {
         // We shadow the slice method of the same name to avoid going through
         // `deref_mut`, which creates an intermediate reference.
@@ -326,12 +328,43 @@ impl<T> HeapArray<T> {
     /// ```
     ///
     /// [`as_mut_ptr`]: HeapArray::as_mut_ptr
+    #[inline(always)]
     pub fn as_ptr(&self) -> *const T {
         // We shadow the slice method of the same name to avoid going through
         // `deref`, which creates an intermediate reference.
         self.ptr.as_ptr()
     }
-
+    /// Extracts a slice containing the entire array.
+    ///
+    /// Equivalent to `&s[..]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use heap_array::heap_array;
+    /// use std::io::{self, Write};
+    /// let buffer = heap_array![1, 2, 3, 5, 8];
+    /// io::sink().write(buffer.as_slice()).unwrap();
+    /// ```
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[T] {
+        self
+    }
+    /// Extracts a mutable slice of the entire array.
+    ///
+    /// Equivalent to `&mut s[..]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io::{self, Read};
+    /// let mut buffer = vec![0; 3];
+    /// io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();
+    /// ```
+    #[inline(always)]
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        self
+    }
     /// Consumes and leaks the [`HeapArray`], returning a mutable reference to the contents,
     /// `&'a mut [T]`. Note that the type `T` must outlive the chosen lifetime
     /// `'a`. If the type has only static references, or none at all, then this
@@ -460,16 +493,13 @@ impl<T: Clone> From<&[T]> for HeapArray<T> {
 }
 impl<T, const N: usize> From<[T; N]> for HeapArray<T> {
     fn from(values: [T; N]) -> Self {
-        let ptr = match unsafe { alloc_uninnit::<T>(N) } {
+        let mut ptr = match unsafe { alloc_uninnit::<T>(N) } {
             Some(ptr) => ptr,
             None => return Self::new()
         };
 
-        let mut p = ptr.as_ptr() as *mut T;
-        for value in values {unsafe {
-            ptr::write(p, value);
-            p = p.add(1);
-        }}
+        unsafe { ptr::copy_nonoverlapping(values.as_ptr(), ptr.as_mut().as_mut_ptr(), N) }
+        forget(values);
 
         Self { ptr: ptr.cast(), len: N }
     }
@@ -516,8 +546,8 @@ impl<T, const N: usize> TryFrom<HeapArray<T>> for [T; N] {
         }
 
         if N == 0 {
-            // Safety: N is 0, and so *const [T; N] is *const [T; 0]
-            return Ok(unsafe { ptr::read((&[]) as *const [T; N]) })
+            // Wont Panic N is 0, so teh fn wont run
+            return Ok(core::array::from_fn(|_| unreachable!()))
         }
 
         let mut value = ManuallyDrop::new(value);
