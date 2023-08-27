@@ -784,6 +784,43 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
     }
 }
 
+#[cfg(feature = "simd-json")]
+use simd_json_derive::{Serialize as SimdSerialize, Deserialize as SimdDeserialize, Tape};
+
+#[cfg(feature = "simd-json")]
+extern crate std;
+
+#[cfg(feature = "simd-json")]
+impl<T: SimdSerialize> SimdSerialize for HeapArray<T> {
+    fn json_write<W>(&self, writer: &mut W) -> simd_json_derive::Result where W: std::io::Write {
+        let mut i = self.iter();
+        if let Some(first) = i.next() {
+            writer.write_all(b"[")?;
+            first.json_write(writer)?;
+            for e in i {
+                writer.write_all(b",")?;
+                e.json_write(writer)?;
+            }
+            writer.write_all(b"]")
+        } else {
+            writer.write_all(b"[]")
+        }
+    }
+}
+
+#[cfg(feature = "simd-json")]
+impl<'input, T: SimdDeserialize> SimdDeserialize for HeapArray<T> {
+    fn from_tape(tape: &mut Tape<'input>) -> simd_json::Result<Self> where Self: Sized + 'input {
+        if let Some(simd_json::Node::Array(size, _)) = tape.next() {
+            HeapArray::try_from_fn(size, |_| T::from_tape(tape))
+        } else {
+            Err(simd_json::Error::generic(
+                simd_json::ErrorType::ExpectedArray,
+            ))
+        }
+    }
+}
+
 /// Creates a [`HeapArray`] containing the arguments.
 ///
 /// `heap_array!` allows `HeapArray`'s to be defined with the same syntax as array expressions.
