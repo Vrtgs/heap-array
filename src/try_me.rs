@@ -1,70 +1,69 @@
 use core::convert::Infallible;
 use core::ops::ControlFlow;
 
-pub trait Try {
+type Residual<T> = <T as Try>::TryType<Infallible>;
+
+mod sealed {
+    use super::NeverShortCircuit;
+    pub trait Sealed {}
+
+    impl<T> Sealed for Option<T> {}
+    impl<T, E> Sealed for Result<T, E> {}
+    impl<T> Sealed for NeverShortCircuit<T> {}
+}
+
+pub trait Try: sealed::Sealed {
     type Output;
-    type Residual;
     type TryType<T>;
 
     fn from_element<ELM>(e: ELM) -> Self::TryType<ELM>;
-    fn from_residual<T>(residual: Self::Residual) -> Self::TryType<T>;
-    fn branch(self) -> ControlFlow<Self::Residual, Self::Output>;
+    fn from_residual<T>(residual: Residual<Self>) -> Self::TryType<T>;
+    fn branch(self) -> ControlFlow<Residual<Self>, Self::Output>;
 }
 
-impl<T> Try for Option<T> {
-    type Output = T;
-    type Residual = Option<Infallible>;
-    type TryType<TT> = Option<TT>;
 
-    #[inline(always)]
-    fn from_element<ELM>(e: ELM) -> Self::TryType<ELM> {
-        Some(e)
-    }
+macro_rules! try_impl {
+    (
+        $T: ident < T $(, $($generics: tt),* )? >,
+        $success:ident ($output:ident),
+        $fail: ident $(($err:ident))?
+    ) => {
+        impl<T $(, $($generics)*)?> Try for $T<T $(, $($generics)*)?> {
+            type Output = T;
+            type TryType<TT> = $T<TT $(, $($generics)* )?>;
 
-    #[inline(always)]
-    fn from_residual<TT>(residual: Self::Residual) -> Self::TryType<TT> {
-        match residual {
-            Some(infallible) => match infallible{},
-            None => {None}
+            #[inline(always)]
+            fn from_element<ELM>(e: ELM) -> Self::TryType<ELM> {
+                $success(e)
+            }
+
+            #[inline(always)]
+            fn from_residual<TT>(residual: Residual<Self>) -> Self::TryType<TT> {
+                match residual {
+                    $success(infallible) => match infallible {},
+                    $fail$(($err))? => {$fail$(($err))?}
+                }
+            }
+
+            #[inline(always)]
+            fn branch(self) -> ControlFlow<Residual<Self>, Self::Output> {
+                match self {
+                    $success($output) => ControlFlow::Continue($output),
+                    $fail$(($err))? => ControlFlow::Break($fail$(($err))?)
+                }
+            }
         }
-    }
-
-    #[inline(always)]
-    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
-        match self {
-            Some(out) => {ControlFlow::Continue(out)}
-            None => {ControlFlow::Break(None)}
-        }
-    }
-}
-impl<T, E> Try for Result<T, E> {
-    type Output = T;
-    type Residual = Result<Infallible, E>;
-    type TryType<TT> = Result<TT, E>;
-
-    #[inline(always)]
-    fn from_element<ELM>(e: ELM) -> Self::TryType<ELM> {
-        Ok(e)
-    }
-
-    #[inline(always)]
-    fn from_residual<TT>(residual: Self::Residual) -> Self::TryType<TT> {
-        match residual {
-            Ok(infallible) => match infallible{},
-            Err(err) => {Err(err)}
-        }
-    }
-
-    #[inline(always)]
-    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
-        match self {
-            Ok(out) => {ControlFlow::Continue(out)}
-            Err(err) => {ControlFlow::Break(Err(err))}
-        }
-    }
+    };
 }
 
-#[repr(transparent)]
+try_impl! {
+    Option<T>, Some(out), None
+}
+try_impl! {
+    Result<T, E>, Ok(out), Err(err)
+}
+
+
 pub(crate) struct NeverShortCircuit<T>(pub T);
 
 impl<T> NeverShortCircuit<T> {
@@ -76,21 +75,18 @@ impl<T> NeverShortCircuit<T> {
 
 impl<T> Try for NeverShortCircuit<T> {
     type Output = T;
-    type Residual = Infallible;
     type TryType<TT> = TT;
 
     #[inline(always)]
-    fn from_element<ELM>(e: ELM) -> Self::TryType<ELM> {
-        e
+    fn from_element<ELM>(e: ELM) -> Self::TryType<ELM> { e }
+
+    #[inline(always)]
+    fn from_residual<TT>(infallible: Residual<Self>) -> Self::TryType<TT> {
+        match infallible {}
     }
 
     #[inline(always)]
-    fn from_residual<TT>(infallible: Self::Residual) -> Self::TryType<TT> {
-        match infallible{}
-    }
-
-    #[inline(always)]
-    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+    fn branch(self) -> ControlFlow<Residual<Self>, Self::Output> {
         ControlFlow::Continue(self.0)
     }
 }
