@@ -5,7 +5,7 @@ and is meant as a replacement for `Box<[T]>`
 
 nice to have: compatible with serde
 
-# Examples
+# Example
 ```rust
 use heap_array::{heap_array, HeapArray};
 

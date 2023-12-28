@@ -423,9 +423,7 @@ impl_heap_array! {
         /// io::sink().write(buffer.as_slice()).unwrap();
         /// ```
         #[inline(always)]
-        pub fn as_slice(&self) -> &[T] {
-            self
-        }
+        pub fn as_slice(&self) -> &[T] { self }
 
         /// Extracts a mutable slice of the entire array.
         ///
@@ -440,9 +438,7 @@ impl_heap_array! {
         /// io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();
         /// ```
         #[inline(always)]
-        pub fn as_mut_slice(&mut self) -> &mut [T] {
-            self
-        }
+        pub fn as_mut_slice(&mut self) -> &mut [T] { self }
 
         /// Consumes and leaks the [`HeapArray`], returning a mutable reference to the contents,
         /// `&'a mut [T]`. Note that the type `T` must outlive the chosen lifetime
@@ -466,8 +462,8 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         pub allocator-api fn leak<{'a}>(self) -> &'a mut [T] where {A: 'a} {
-            let mut this = ManuallyDrop::new(self);
-            unsafe { core::slice::from_raw_parts_mut(this.as_mut_ptr(), this.len) }
+            let (ptr, len) = self.into_raw_parts();
+            unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), len) }
         }
 
         /// Consumes and leaks the [`HeapArray`], returning a mutable reference to the contents,
@@ -491,9 +487,10 @@ impl_heap_array! {
         /// assert_eq!(static_ref, &[2, 2, 3]);
         /// ```
         /// [`HeapArray`]: HeapArray
-        pub not(allocator-api) fn leak(self) -> &'static mut [T] {
-            let mut this = ManuallyDrop::new(self);
-            unsafe { core::slice::from_raw_parts_mut(this.as_mut_ptr(), this.len) }
+        #[inline]
+        pub not(allocator-api) fn leak<{'a}>(self) -> &'a mut [T] {
+            let (ptr, len) = self.into_raw_parts();
+            unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), len) }
         }
 
         /// Decomposes a [`HeapArray`] into its raw components.
@@ -550,12 +547,12 @@ impl_heap_array! {
         /// # Examples
         ///
         /// ```
-        /// #![feature(allocator_api, vec_into_raw_parts)]
+        /// #![feature(allocator_api)]
         ///
         /// use std::alloc::System;
         /// use heap_array::HeapArray;
         ///
-        /// let mut v: HeapArray<i32, System> = HeapArray::from_slice_in(&[-1, 0, 1], System);
+        /// let mut v: HeapArray<i32, System> = HeapArray::from_array_in([-1, 0, 1], System);
         ///
         /// let (ptr, len, alloc) = v.into_raw_parts_with_alloc();
         ///
@@ -580,29 +577,32 @@ impl_heap_array! {
         ///
         /// After calling this function, the [`HeapArray`] is responsible for the
         /// memory management. The only way to get this back and get back
-        /// the raw pointer and length back is with the [`into_raw_parts`] function, granting you
+        /// the raw pointer, length and allocator back is with the [`into_raw_parts_with_alloc`] function, granting you
         /// control of the allocation, and allocator again.
         ///
         /// # Examples
         ///
         /// ```
+        /// #![feature(allocator_api)]
         ///
         /// use std::alloc::System;
-        /// use heap_array::{heap_array, HeapArray};
-        /// let v: HeapArray<i32> = heap_array![-1, 0, 1];
+        /// use heap_array::HeapArray;
         ///
-        /// let (ptr, len) = v.into_raw_parts();
+        /// let mut v: HeapArray<i32, System> = HeapArray::from_array_in([-1, 0, 1], System);
+        ///
+        /// let (ptr, len, alloc) = v.into_raw_parts_with_alloc();
         ///
         /// let rebuilt = unsafe {
         ///     // We can now make changes to the components, such as
         ///     // transmuting the raw pointer to a compatible type.
         ///     let ptr = ptr.cast::<u32>();
         ///
-        ///     HeapArray::from_raw_parts_in(ptr, len, System)
+        ///     HeapArray::from_raw_parts_in(ptr, len, alloc)
         /// };
+        ///
         /// assert_eq!(*rebuilt, [4294967295, 0, 1]);
         /// ```
-        /// [`into_raw_parts`]: HeapArray::into_raw_parts
+        /// [`into_raw_parts`]: HeapArray::into_raw_parts_with_alloc
         /// [`HeapArray`]: HeapArray
         #[inline(always)]
         pub allocator-api const fn from_raw_parts_in(ptr: NonNull<T>, len: usize, alloc: A) -> Self {
@@ -1304,18 +1304,6 @@ impl<T, const N: usize> From<[T; N]> for HeapArray<T> {
     }
 }
 
-#[cfg(feature = "allocator-api")]
-impl<T, A: Allocator> From<Box<[T], A>> for HeapArray<T, A> {
-    #[inline]
-    fn from(value: Box<[T], A>) -> Self {
-        let (parts, alloc) = Box::into_raw_with_allocator(value);
-        unsafe {
-            // A box pointer will always be a properly aligned non-null pointer.
-            Self::from_raw_parts_in(NonNull::new_unchecked(parts.cast()), (*parts).len(), alloc)
-        }
-    }
-}
-
 #[cfg(not(feature = "allocator-api"))]
 impl<T> From<Box<[T]>> for HeapArray<T> {
     #[inline]
@@ -1324,6 +1312,18 @@ impl<T> From<Box<[T]>> for HeapArray<T> {
         unsafe {
             // A box pointer will always be a properly aligned non-null pointer.
             Self::from_raw_parts(NonNull::new_unchecked(raw.cast()), (*raw).len())
+        }
+    }
+}
+
+#[cfg(feature = "allocator-api")]
+impl<T, A: Allocator> From<Box<[T], A>> for HeapArray<T, A> {
+    #[inline]
+    fn from(value: Box<[T], A>) -> Self {
+        let (parts, alloc) = Box::into_raw_with_allocator(value);
+        unsafe {
+            // A box pointer will always be a properly aligned non-null pointer.
+            Self::from_raw_parts_in(NonNull::new_unchecked(parts.cast()), (*parts).len(), alloc)
         }
     }
 }
@@ -1344,14 +1344,38 @@ impl<T, A: Allocator> From<Vec<T, A>> for HeapArray<T, A> {
     }
 }
 
-#[cfg(feature = "allocator-api")]
-impl<T, A: Allocator> From<HeapArray<T, A>> for Vec<T, A> {
+
+
+// error[E0210] when trying to do these with alloc-api
+impl<T> From<HeapArray<T>> for Box<[T]> {
     #[inline]
-    fn from(value: HeapArray<T, A>) -> Self {
-        let (ptr, len, alloc) = value.into_raw_parts_with_alloc();
-        unsafe { Vec::from_raw_parts_in(ptr.as_ptr(), len, len, alloc) }
+    fn from(value: HeapArray<T>) -> Self {
+        value.into_boxed_slice()
     }
 }
+
+impl<T, const N: usize> TryFrom<HeapArray<T>> for Box<[T; N]> {
+    type Error = HeapArray<T>;
+
+    fn try_from(value: HeapArray<T>) -> Result<Self, Self::Error> {
+        if value.len != N {
+            Err(value)
+        } else {
+            let value = ManuallyDrop::new(value);
+            let ptr = value.ptr;
+
+            // TODO: alloc-api
+            // // we never use alloc again, and it doesnt get dropped
+            // let alloc = unsafe { ptr::read(&*value.alloc) };
+
+            // SAFETY: we just checked if value.len != N
+            let ptr = ptr.as_ptr() as *mut [T; N];
+            Ok(unsafe { Box::from_raw(ptr) })
+        }
+    }
+}
+
+
 
 #[cfg(not(feature = "allocator-api"))]
 impl<T> From<HeapArray<T>> for Vec<T> {
@@ -1361,6 +1385,16 @@ impl<T> From<HeapArray<T>> for Vec<T> {
         unsafe { Vec::from_raw_parts(ptr.as_ptr(), len, len) }
     }
 }
+
+#[cfg(feature = "allocator-api")]
+impl<T, A: Allocator> From<HeapArray<T, A>> for Vec<T, A> {
+    #[inline]
+    fn from(value: HeapArray<T, A>) -> Self {
+        let (ptr, len, alloc) = value.into_raw_parts_with_alloc();
+        unsafe { Vec::from_raw_parts_in(ptr.as_ptr(), len, len, alloc) }
+    }
+}
+
 
 macro_rules! try_from_array_impl {
     ($T: ty, $N: ident, $value: ident) => {{
@@ -1398,27 +1432,6 @@ impl<T, const N: usize> TryFrom<HeapArray<T>> for [T; N] {
 
     fn try_from(value: HeapArray<T>) -> Result<[T; N], Self::Error> {
         try_from_array_impl! (T, N, value)
-    }
-}
-
-// Funky From<> compiler stuff that stops me from doing this with alloc api
-impl<T> From<HeapArray<T>> for Box<[T]> {
-    #[inline]
-    fn from(value: HeapArray<T>) -> Self { value.into_boxed_slice() }
-}
-impl<T, const N: usize> TryFrom<HeapArray<T>> for Box<[T; N]> {
-    type Error = HeapArray<T>;
-
-    fn try_from(value: HeapArray<T>) -> Result<Self, Self::Error> {
-        if value.len != N {
-            Err(value)
-        } else {
-            let (ptr, len) = value.into_raw_parts();
-
-            // SAFETY: we just checked if value.len != N
-            let ptr = ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len) as *mut [T; N];
-            Ok(unsafe { Box::from_raw(ptr) })
-        }
     }
 }
 
@@ -1512,6 +1525,7 @@ unsafe impl<#[may_dangle] T> Drop for HeapArray<T> {
 impl<T, A: Allocator> Drop for HeapArray<T, A> {
     drop_impl! {  }
 }
+
 #[allow(missing_docs)]
 #[cfg(all(not(feature = "dropck"), not(feature = "allocator-api")))]
 impl<T> Drop for HeapArray<T> {
@@ -1522,8 +1536,8 @@ impl<T> Drop for HeapArray<T> {
 fn validate() {
     #[allow(drop_bounds)]
     fn check<T: Drop>() {};
-    // can be any
-    check::<HeapArray<u8>>()
+    // can be any type
+    check::<HeapArray<u8>>();
 }
 
 identical_impl! {
@@ -1680,13 +1694,12 @@ impl<T: Serialize> Serialize for HeapArray<T> {
     }
 }
 
-#[cfg(feature = "serde")]
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        struct HeapArrayVisitor<T> {
-            marker: PhantomData<T>,
-        }
 
+
+#[cfg(feature = "serde")]
+impl<'a, T: Deserialize<'a>> HeapArray<T> {
+    /// Deserializes the heap array from a [`SeqAccess`]
+    pub fn from_sequence<A: SeqAccess<'a>>(mut sequence: A) -> Result<Self, A::Error> {
         #[repr(transparent)]
         struct ExpectedLen(usize);
 
@@ -1698,6 +1711,30 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
             }
         }
 
+        if let Some(len) = sequence.size_hint() {
+            HeapArray::try_from_fn(len, |i| sequence.next_element::<T>().and_then(|res| match res {
+                Some(out) => Ok(out),
+                None => Err(Error::invalid_length(i+1, &ExpectedLen(len)))
+            }))
+        } else {
+            let mut values = Vec::<T>::new();
+            while let Some(value) = sequence.next_element()? {
+                values.push(value);
+            }
+
+            Ok(HeapArray::from(values))
+        }
+    }
+}
+
+
+#[cfg(feature = "serde")]
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        struct HeapArrayVisitor<T> {
+            marker: PhantomData<T>,
+        }
+
         impl<'a, T: Deserialize<'a>> Visitor<'a> for HeapArrayVisitor<T> {
             type Value = HeapArray<T>;
 
@@ -1705,26 +1742,10 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
                 formatter.write_str("a sequence")
             }
 
-            fn visit_seq<Arr>(self, mut seq: Arr) -> Result<Self::Value, Arr::Error>
-                where
-                    Arr: SeqAccess<'a>,
-            {
-                if let Some(len) = seq.size_hint() {
-                    HeapArray::try_from_fn(len, |i| {
-                        seq.next_element::<T>().and_then(|res| match res {
-                            Some(out) => Ok(out),
-                            None => Err(Error::invalid_length(i+1, &ExpectedLen(len)))
-                        })
-                    })
-                } else {
-                    let mut values = Vec::<T>::new();
-                    while let Some(value) = seq.next_element()? {
-                        values.push(value);
-                    }
-
-                    Ok(HeapArray::from(values))
-                }
-            }
+            #[inline(always)]
+            fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+                where A: SeqAccess<'a>,
+            { HeapArray::from_sequence(seq) }
         }
 
         let visitor = HeapArrayVisitor::<T> {

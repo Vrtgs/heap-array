@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "heap-array"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "likely_stable",
  "serde",
