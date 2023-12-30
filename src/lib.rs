@@ -59,6 +59,8 @@ use alloc::{
 
 #[cfg(feature = "allocator-api")]
 use alloc::alloc::{Allocator, Global};
+use core::slice::SliceIndex;
+use core::ops::{Index, IndexMut};
 
 use likely_stable::{unlikely};
 use crate::guard::Guard;
@@ -1250,34 +1252,34 @@ macro_rules! identical_impl {
     // base case for recursion
     () => {  };
     (
-        impl<$($time: lifetime, )? T $(: {$($t_restrict:tt)+})?, Maybe<A $(: {$( $($alloc_restrict:tt)+ )&+})?>> {$($Trait:tt)+} for HeapArray<T, Maybe<A>> $(where {$($restrict:tt)*})? {
+        impl<$($time: lifetime, )?  T $(: {$($t_restrict:tt)+})?, $({$($generics:tt)*},)? Maybe<A $(: {$( $($alloc_restrict:tt)+ )&+})?>> {$($Trait:tt)+} for HeapArray<T, Maybe<A>> $(where {$($restrict:tt)*})? {
             $($r#impl:tt)*
         }
         $($rest:tt)*
     ) => {
         #[cfg(not(feature = "allocator-api"))]
-        impl<$($time, )? T $(: $($t_restrict)+)?> $($Trait)+ for HeapArray<T> $(where $($restrict)*)? {
+        impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)?> $($Trait)+ for HeapArray<T> $(where $($restrict)*)? {
             $($r#impl)*
         }
         #[cfg(feature = "allocator-api")]
-        impl<$($time, )? T $(: $($t_restrict)+)?, A: Allocator $(+ $($($alloc_restrict)*)+)?> $($Trait)+ for HeapArray<T, A> $(where $($restrict)*)? {
+        impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)? A: Allocator $(+ $($($alloc_restrict)*)+)?> $($Trait)+ for HeapArray<T, A> $(where $($restrict)*)? {
             $($r#impl)*
         }
 
         identical_impl! { $($rest)* }
     };
     (
-        unsafe impl<$($time: lifetime, )? T $(: {$($t_restrict:tt)+})?, Maybe<A$(: {$( $($alloc_restrict:tt)+ )&+})?>> {$($Trait:tt)+} for HeapArray<T, Maybe<A>> $(where {$($restrict:tt)*})? {
+        unsafe impl<$($time: lifetime, )? T $(: {$($t_restrict:tt)+})?, $({$($generics:tt)*},)? Maybe<A$(: {$( $($alloc_restrict:tt)+ )&+})?>> {$($Trait:tt)+} for HeapArray<T, Maybe<A>> $(where {$($restrict:tt)*})? {
             $($r#impl:tt)*
         }
         $($rest:tt)*
     ) => {
         #[cfg(not(feature = "allocator-api"))]
-        unsafe impl<$($time, )? T $(: $($t_restrict)+)?> $($Trait)+ for HeapArray<T> $(where $($restrict)*)? {
+        unsafe impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)?> $($Trait)+ for HeapArray<T> $(where $($restrict)*)? {
             $($r#impl)*
         }
         #[cfg(feature = "allocator-api")]
-        unsafe impl<$($time, )? T $(: $($t_restrict)+)?, A: Allocator $(+ $($($alloc_restrict)*)+)?> $($Trait)+ for HeapArray<T, A> $(where $($restrict)*)? {
+        unsafe impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)? A: Allocator $(+ $($($alloc_restrict)*)+)?> $($Trait)+ for HeapArray<T, A> $(where $($restrict)*)? {
             $($r#impl)*
         }
 
@@ -1435,18 +1437,17 @@ impl<T, const N: usize> TryFrom<HeapArray<T>> for [T; N] {
     }
 }
 
-#[cfg(not(feature = "allocator-api"))]
-impl<T: Clone> Clone for HeapArray<T> {
-    fn clone(&self) -> Self {
-        HeapArray::from_slice(self.deref())
-    }
-}
 
-#[cfg(feature = "allocator-api")]
-impl<T: Clone, A: Allocator + Clone> Clone for HeapArray<T, A> {
-    fn clone(&self) -> Self {
-        HeapArray::from_slice_in(self, self.allocator().clone())
+identical_impl! {
+    impl<T: {Clone}, Maybe<A: {Clone}>> {Clone} for HeapArray<T, Maybe<A>> {
+        fn clone(&self) -> Self {
+            #[cfg(not(feature = "allocator-api"))]
+            {HeapArray::from_slice(self)}
+            #[cfg(feature = "allocator-api")]
+            {HeapArray::from_slice_in(self, self.allocator().clone())}
+        }
     }
+
 }
 
 
@@ -1476,7 +1477,23 @@ identical_impl! {
     impl<T: {Debug}, Maybe<A>> {Debug} for HeapArray<T, Maybe<A>> {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result { self.deref().fmt(f) }
     }
+
+    impl<T, {I: SliceIndex<[T]>}, Maybe<A>> {Index<I>} for HeapArray<T, Maybe<A>> {
+        type Output = I::Output;
+
+        fn index(&self, index: I) -> &Self::Output {
+            <[T] as Index<I>>::index(self.deref(), index)
+        }
+    }
+
+    impl<T, {I: SliceIndex<[T]>}, Maybe<A>> {IndexMut<I>} for HeapArray<T, Maybe<A>> {
+        fn index_mut(&mut self, index: I) -> &mut Self::Output {
+            <[T] as IndexMut<I>>::index_mut(self.deref_mut(), index)
+        }
+    }
 }
+
+
 
 macro_rules! impl_deref_trait {
     ($trait_name: ident |> fn $fn_name:ident(&self, other: &Self) -> $t: ty) => {
