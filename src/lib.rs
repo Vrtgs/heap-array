@@ -61,7 +61,7 @@ use alloc::{
 use alloc::alloc::{Allocator, Global};
 use core::slice::SliceIndex;
 use core::ops::{Index, IndexMut};
-use std::hash::{Hash, Hasher};
+use core::hash::{Hash, Hasher};
 
 use likely_stable::{unlikely};
 use crate::guard::Guard;
@@ -1499,7 +1499,6 @@ identical_impl! {
         }
     }
 }
-
 
 
 macro_rules! impl_deref_comp_trait {
