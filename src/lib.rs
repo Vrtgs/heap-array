@@ -61,6 +61,7 @@ use alloc::{
 use alloc::alloc::{Allocator, Global};
 use core::slice::SliceIndex;
 use core::ops::{Index, IndexMut};
+use std::hash::{Hash, Hasher};
 
 use likely_stable::{unlikely};
 use crate::guard::Guard;
@@ -1452,6 +1453,12 @@ identical_impl! {
 
 
 identical_impl! {
+    impl<T: {Hash}, Maybe<A>> {Hash} for HeapArray<T, Maybe<A>> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            <[T] as Hash>::hash(self.deref(), state)
+        }
+    }
+
     impl<T, Maybe<A>> {Deref} for HeapArray<T, Maybe<A>> {
         type Target = [T];
 
@@ -1495,7 +1502,7 @@ identical_impl! {
 
 
 
-macro_rules! impl_deref_trait {
+macro_rules! impl_deref_comp_trait {
     ($trait_name: ident |> fn $fn_name:ident(&self, other: &Self) -> $t: ty) => {
         identical_impl! {
             impl<T: {$trait_name}, Maybe<A>> {$trait_name} for HeapArray<T, Maybe<A>> {
@@ -1505,10 +1512,9 @@ macro_rules! impl_deref_trait {
     };
 }
 
-impl_deref_trait!(PartialEq  |> fn eq(&self, other: &Self) -> bool);
-impl_deref_trait!(Ord        |> fn cmp(&self, other: &Self) -> Ordering);
-impl_deref_trait!(PartialOrd |> fn partial_cmp(&self, other: &Self) -> Option<Ordering>);
-
+impl_deref_comp_trait!(PartialEq  |> fn eq(&self, other: &Self) -> bool);
+impl_deref_comp_trait!(Ord        |> fn cmp(&self, other: &Self) -> Ordering);
+impl_deref_comp_trait!(PartialOrd |> fn partial_cmp(&self, other: &Self) -> Option<Ordering>);
 identical_impl! {
     impl<T: {Eq}, Maybe<A>> {Eq} for HeapArray<T, Maybe<A>> {}
 }
