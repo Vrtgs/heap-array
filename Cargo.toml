@@ -10,7 +10,7 @@ repository = "https://github.com/NightMare-Vortex/heap-array"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["dropck", "serde"]
+default = []
 nightly = ["dropck", "allocator-api"]
 serde = ["dep:serde"]
 simd-json =["dep:simd-json-derive", "dep:simd-json"]
