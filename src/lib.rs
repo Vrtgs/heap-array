@@ -160,9 +160,31 @@ macro_rules! assume {
 pub(crate) use assume;
 
 
-macro_rules! from_fn_impl {
+macro_rules! try_from_fn_impl {
     ($T: ty, $R: ty, $len:expr, $f: expr $(, $alloc:ident)?) => {{
         let len = $len;
+        
+        if mem::size_of::<$T>() == 0 { 
+            for i in 0..len {
+                // Safety: this loop runs from 0..len
+                unsafe { assume!(i < len) }
+                if let ControlFlow::Break(r) =  $f(i).branch() { 
+                    return <$R>::from_residual(r)
+                }
+            }
+            
+            let ret = 'scope: {
+                #[cfg(feature = "allocator-api")]
+                break 'scope (unsafe { Self::from_raw_parts_in(NonNull::dangling(), len, $($alloc)?) });
+                
+                #[cfg(not(feature = "allocator-api"))]
+                break 'scope (unsafe { Self::from_raw_parts(NonNull::dangling(), len) });
+            };
+            
+            return <$R>::from_element(ret);
+        }
+        
+        
         let ptr: NonNull<MaybeUninit<$T>> = match alloc_uninit(len $(, &$alloc)?) {
             Some(ptr) => ptr,
             None => {
@@ -197,6 +219,14 @@ macro_rules! from_fn_impl {
 
 macro_rules! from_array_impl {
     ($T:ty, $array:ident, $N:ident $(, $alloc:ident)?) => {{
+        if mem::size_of::<$T>() == 0 { 
+            #[cfg(feature = "allocator-api")]
+            return unsafe { Self::from_raw_parts_in(NonNull::dangling(), $N, $($alloc)?) };
+            
+            #[cfg(not(feature = "allocator-api"))]
+            return unsafe { Self::from_raw_parts(NonNull::dangling(), $N) };
+        }
+        
         let mut ptr: NonNull<MaybeUninit<$T>> = match alloc_uninit($N $(, &$alloc)?) {
             Some(ptr) => ptr,
             None => {
@@ -212,10 +242,10 @@ macro_rules! from_array_impl {
         forget($array);
 
         #[cfg(feature = "allocator-api")]
-        return Self::from_raw_parts_in(ptr.cast(), $N, $($alloc)?);
+        return unsafe { Self::from_raw_parts_in(ptr.cast(), $N, $($alloc)?) };
 
         #[cfg(not(feature = "allocator-api"))]
-        return Self::from_raw_parts(ptr.cast(), $N);
+        return unsafe { Self::from_raw_parts(ptr.cast(), $N) };
     }};
 }
 
@@ -223,68 +253,28 @@ macro_rules! impl_heap_array_inner {
     // base case for recursion
     () => {};
 
-    ($(#[$meta_data:meta])* $visibility:vis fn $name:ident $(<{$($generics:tt)*}>)? ($($args:tt)*) -> $ret:ty $(where {$($restrict:tt)*})? { $($body:tt)* } $($rest:tt)*) => {
-        $(#[$meta_data])*
-        $visibility fn $name $(<$($generics)*>)? ($($args)*) -> $ret $(where $($restrict)*)? {
-            $($body)*
-        }
-
-
-        impl_heap_array_inner! {$($rest)*}
-    };
-    ($(#[$meta_data:meta])* $visibility:vis const fn $name:ident $(<{$($generics:tt)*}>)? ($($args:tt)*) -> $ret:ty $(where {$($restrict:tt)*})? { $($body:tt)* } $($rest:tt)*) => {
-        $(#[$meta_data])*
-        $visibility const fn $name $(<$($generics)*>)? ($($args)*) -> $ret $(where $($restrict)*)? {
-            $($body)*
-        }
-
+    ($(#[$($meta_data:tt)*])* both $item:item $($rest:tt)*) => {
+        $(#[$($meta_data)*])*
+        $item
 
         impl_heap_array_inner! {$($rest)*}
     };
 
-    ($(#[$meta_data:meta])* $visibility:vis allocator-api const fn $name:ident $(<{$($generics:tt)*}>)? ($($args:tt)*) -> $ret:ty $(where {$($restrict:tt)*})? { $($body:tt)* } $($rest:tt)*) => {
+    ($(#[$($meta_data:tt)*])* allocator-api $item:item $($rest:tt)*) => {
         #[cfg(feature = "allocator-api")]
-        $(#[$meta_data])*
-        $visibility const fn $name $(<$($generics)*>)? ($($args)*) -> $ret $(where $($restrict)*)? {
-            $($body)*
-        }
-
+        $(#[$($meta_data)*])*
+        $item
 
         impl_heap_array_inner! {$($rest)*}
     };
-    ($(#[$meta_data:meta])* $visibility:vis allocator-api fn $name:ident $(<{$($generics:tt)*}>)? ($($args:tt)*) -> $ret:ty $(where {$($restrict:tt)*})? { $($body:tt)* } $($rest:tt)*) => {
-        #[cfg(feature = "allocator-api")]
-        $(#[$meta_data])*
-        $visibility fn $name $(<$($generics)*>)? ($($args)*) -> $ret $(where $($restrict)*)? {
-            $($body)*
-        }
-
-
-        impl_heap_array_inner! {$($rest)*}
-    };
-
-    ($(#[$meta_data:meta])* $visibility:vis not(allocator-api) const fn $name:ident $(<{$($generics:tt)*}>)? ($($args:tt)*) -> $ret:ty $(where {$($restrict:tt)*})? { $($body:tt)* } $($rest:tt)*) => {
+    ($(#[$($meta_data:tt)*])* not(allocator-api) $item:item $($rest:tt)*) => {
         #[cfg(not(feature = "allocator-api"))]
-        $(#[$meta_data])*
-        $visibility const fn $name $(<$($generics)*>)? ($($args)*) -> $ret $(where $($restrict)*)? {
-            $($body)*
-        }
+        $(#[$($meta_data)*])*
+        $item
 
 
         impl_heap_array_inner! {$($rest)*}
     };
-    ($(#[$meta_data:meta])* $visibility:vis not(allocator-api) fn $name:ident $(<{$($generics:tt)*}>)? ($($args:tt)*) -> $ret:ty $(where {$($restrict:tt)*})? { $($body:tt)* } $($rest:tt)*) => {
-        #[cfg(not(feature = "allocator-api"))]
-        $(#[$meta_data])*
-        $visibility fn $name $(<$($generics)*>)? ($($args)*) -> $ret $(where $($restrict)*)? {
-            $($body)*
-        }
-
-
-        impl_heap_array_inner! {$($rest)*}
-    };
-
-    (raw-rest { $($t:tt)* }) => {$($t)*};
 }
 
 macro_rules! impl_heap_array {
@@ -316,8 +306,8 @@ impl_heap_array! {
         /// [`HeapArray`]: HeapArray
         /// [`into_raw_parts_with_alloc`]: HeapArray::into_raw_parts_with_alloc
         #[inline]
-        pub allocator-api const fn new_in(alloc: A) -> Self {
-            Self::from_raw_parts_in(NonNull::<T>::dangling(), 0, alloc)
+        allocator-api pub const fn new_in(alloc: A) -> Self {
+            unsafe { Self::from_raw_parts_in(NonNull::<T>::dangling(), 0, alloc) }
         }
 
         /// Returns `true` if the vector contains no elements.
@@ -334,7 +324,7 @@ impl_heap_array! {
         /// assert!(!av.is_empty());
         /// ```
         #[inline]
-        pub const fn is_empty(&self) -> bool { self.len == 0 }
+        both pub const fn is_empty(&self) -> bool { self.len == 0 }
 
         /// Returns the number of elements in the heap-array, also referred to
         /// as its 'length'.
@@ -347,11 +337,11 @@ impl_heap_array! {
         /// assert_eq!(a.len(), 3);
         /// ```
         #[inline]
-        pub const fn len(&self) -> usize { self.len }
+        both pub const fn len(&self) -> usize { self.len }
 
         /// Returns a reference to the underlying allocator.
         #[inline]
-        pub allocator-api fn allocator(&self) -> &A { &self.alloc }
+        allocator-api pub fn allocator(&self) -> &A { &self.alloc }
 
         /// Returns an unsafe mutable pointer to the heap-array's buffer, or a dangling
         /// raw pointer valid for zero sized reads if the heap-array didn't allocate.
@@ -375,7 +365,7 @@ impl_heap_array! {
         /// assert_eq!(*arr, [0, 1, 2, 3, 4, 5]);
         /// ```
         #[inline(always)]
-        pub fn as_mut_ptr(&mut self) -> *mut T {
+        both pub fn as_mut_ptr(&mut self) -> *mut T {
             // We shadow the slice method of the same name to avoid going through
             // `deref_mut`, which creates an intermediate reference.
             self.ptr.as_ptr()
@@ -386,7 +376,7 @@ impl_heap_array! {
         ///
         /// The caller must ensure that the heap-array outlives the pointer this
         /// function returns, or else it will end up pointing to garbage.
-        /// Modifying the heap-array may cause its buffer to be reallocated,
+        /// Modifying the heap-array may cause it's buffer to be reallocated,
         /// which would also make any pointers to it invalid.
         ///
         /// The caller must also ensure that the memory the pointer (non-transitively) points to
@@ -407,7 +397,7 @@ impl_heap_array! {
         ///
         /// [`as_mut_ptr`]: HeapArray::as_mut_ptr
         #[inline(always)]
-        pub const fn as_ptr(&self) -> *const T {
+        both pub const fn as_ptr(&self) -> *const T {
             // We shadow the slice method of the same name to avoid going through
             // `deref`, which creates an intermediate reference.
             self.ptr.as_ptr()
@@ -426,7 +416,7 @@ impl_heap_array! {
         /// io::sink().write(buffer.as_slice()).unwrap();
         /// ```
         #[inline(always)]
-        pub fn as_slice(&self) -> &[T] { self }
+        both pub fn as_slice(&self) -> &[T] { self }
 
         /// Extracts a mutable slice of the entire array.
         ///
@@ -441,7 +431,7 @@ impl_heap_array! {
         /// io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();
         /// ```
         #[inline(always)]
-        pub fn as_mut_slice(&mut self) -> &mut [T] { self }
+        both pub fn as_mut_slice(&mut self) -> &mut [T] { self }
 
         /// Consumes and leaks the [`HeapArray`], returning a mutable reference to the contents,
         /// `&'a mut [T]`. Note that the type `T` must outlive the chosen lifetime
@@ -464,7 +454,7 @@ impl_heap_array! {
         /// assert_eq!(static_ref, &[2, 2, 3]);
         /// ```
         /// [`HeapArray`]: HeapArray
-        pub allocator-api fn leak<{'a}>(self) -> &'a mut [T] where {A: 'a} {
+        allocator-api pub fn leak<'a>(self) -> &'a mut [T] where A: 'a {
             let (ptr, len) = self.into_raw_parts();
             unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), len) }
         }
@@ -491,7 +481,7 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         #[inline]
-        pub not(allocator-api) fn leak<{'a}>(self) -> &'a mut [T] {
+        not(allocator-api) pub fn leak<'a>(self) -> &'a mut [T] {
             let (ptr, len) = self.into_raw_parts();
             unsafe { core::slice::from_raw_parts_mut(ptr.as_ptr(), len) }
         }
@@ -528,7 +518,7 @@ impl_heap_array! {
         /// [`from_raw_parts`]: HeapArray::from_raw_parts
         /// [`HeapArray`]: HeapArray
         #[inline]
-        pub fn into_raw_parts(self) -> (NonNull<T>, usize) {
+        both pub fn into_raw_parts(self) -> (NonNull<T>, usize) {
             let this = ManuallyDrop::new(self);
             (this.ptr, this.len)
         }
@@ -570,9 +560,9 @@ impl_heap_array! {
         /// assert_eq!(*rebuilt, [4294967295, 0, 1]);
         /// ```
         #[inline]
-        pub allocator-api fn into_raw_parts_with_alloc(self) -> (NonNull<T>, usize, A) {
+        allocator-api pub fn into_raw_parts_with_alloc(self) -> (NonNull<T>, usize, A) {
             let this = ManuallyDrop::new(self);
-            // we never use alloc again, and it doesnt get dropped
+            // we never use alloc again, and it doesn't get dropped
             (this.ptr, this.len, unsafe { ptr::read(&*this.alloc) })
         }
 
@@ -582,7 +572,10 @@ impl_heap_array! {
         /// memory management. The only way to get this back and get back
         /// the raw pointer, length and allocator back is with the [`into_raw_parts_with_alloc`] function, granting you
         /// control of the allocation, and allocator again.
-        ///
+        /// 
+        /// # Safety:
+        /// must be given from [`into_raw_parts_with_alloc`]
+        /// 
         /// # Examples
         ///
         /// ```
@@ -608,7 +601,7 @@ impl_heap_array! {
         /// [`into_raw_parts`]: HeapArray::into_raw_parts_with_alloc
         /// [`HeapArray`]: HeapArray
         #[inline(always)]
-        pub allocator-api const fn from_raw_parts_in(ptr: NonNull<T>, len: usize, alloc: A) -> Self {
+        allocator-api pub const unsafe fn from_raw_parts_in(ptr: NonNull<T>, len: usize, alloc: A) -> Self {
             Self { ptr, len, __marker: PhantomData, alloc: ManuallyDrop::new(alloc) }
         }
 
@@ -618,6 +611,9 @@ impl_heap_array! {
         /// memory management. The only way to get this back and get back
         /// the raw pointer and length back is with the [`into_raw_parts`] function, granting you
         /// control of the allocation again.
+        ///
+        /// # Safety:
+        /// must be given from [`into_raw_parts`]
         ///
         /// # Examples
         ///
@@ -639,7 +635,7 @@ impl_heap_array! {
         /// [`into_raw_parts`]: HeapArray::into_raw_parts
         /// [`HeapArray`]: HeapArray
         #[inline(always)]
-        pub not(allocator-api) const fn from_raw_parts(ptr: NonNull<T>, len: usize) -> Self {
+        not(allocator-api) pub const unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize) -> Self {
             Self { ptr, len, __marker: PhantomData }
         }
 
@@ -663,7 +659,7 @@ impl_heap_array! {
         /// assert_eq!(x, y);
         /// ```
         #[inline]
-        pub allocator-api fn into_boxed_slice(self) -> Box<[T], A> {
+        allocator-api pub fn into_boxed_slice(self) -> Box<[T], A> {
             let (ptr, len, alloc) = self.into_raw_parts_with_alloc();
             let ptr = ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len);
             unsafe { Box::from_raw_in(ptr, alloc) }
@@ -689,7 +685,7 @@ impl_heap_array! {
         /// assert_eq!(x, y);
         /// ```
         #[inline]
-        pub not(allocator-api) fn into_boxed_slice(self) -> Box<[T]> {
+        not(allocator-api) pub fn into_boxed_slice(self) -> Box<[T]> {
             let (ptr, len) = self.into_raw_parts();
             let ptr = ptr::slice_from_raw_parts_mut(ptr.as_ptr(), len);
             unsafe { Box::from_raw(ptr) }
@@ -700,7 +696,7 @@ impl_heap_array! {
         /// The resulting vector can be converted back into an [`HeapArray`] via
         /// `Vec<T>`'s `into()` method or by calling `HeapArray::from(vec)`.
         ///
-        /// Should only be used if you plan to resizing, other wise use `into_boxed_slice` for a smaller
+        /// Should only be used if you plan to resizing, otherwise use `into_boxed_slice` for a smaller
         /// type
         /// # Examples
         ///
@@ -713,7 +709,7 @@ impl_heap_array! {
         /// assert_eq!(x, vec![10, 40, 30]);
         /// ```
         #[inline]
-        pub allocator-api fn into_vec(self) -> Vec<T, A> {
+        allocator-api pub fn into_vec(self) -> Vec<T, A> {
             self.into()
         }
 
@@ -722,7 +718,7 @@ impl_heap_array! {
         /// The resulting vector can be converted back into an [`HeapArray`] via
         /// `Vec<T>`'s `into()` method or by calling `HeapArray::from(vec)`.
         ///
-        /// Should only be used if you plan to resizing, other wise use `into_boxed_slice` for a smaller
+        /// Should only be used if you plan to resizing, otherwise use `into_boxed_slice` for a smaller
         /// type
         /// # Examples
         ///
@@ -735,7 +731,7 @@ impl_heap_array! {
         /// assert_eq!(x, vec![10, 40, 30]);
         /// ```
         #[inline]
-        pub not(allocator-api) fn into_vec(self) -> Vec<T> {
+        not(allocator-api) pub fn into_vec(self) -> Vec<T> {
             self.into()
         }
 
@@ -769,7 +765,7 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         #[inline]
-        pub allocator-api fn from_fn_in(len: usize, f: impl FnMut(usize) -> T, alloc: A) -> Self {
+        allocator-api pub fn from_fn_in(len: usize, f: impl FnMut(usize) -> T, alloc: A) -> Self {
             Self::try_from_fn_in(len, NeverShortCircuit::wrap_fn(f), alloc)
         }
 
@@ -806,12 +802,12 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         /// [`from_fn`]: HeapArray::from_fn
-        pub allocator-api fn try_from_fn_in<{R}>(
+        allocator-api pub fn try_from_fn_in<R>(
             len: usize,
             mut f: impl FnMut(usize) -> R,
             alloc: A
-        ) -> R::TryType<Self> where {R: Try<Output=T>}
-        { from_fn_impl!(T, R, len, f, alloc) }
+        ) -> R::TryType<Self> where R: Try<Output=T>
+        { try_from_fn_impl!(T, R, len, f, alloc) }
 
         /// Create a [`HeapArray`] from a given element and size.
         ///
@@ -838,9 +834,9 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         /// [`heap_array`]: heap_array
-        #[inline(always)]
-        pub allocator-api fn from_element_in(len: usize, element: T, alloc: A) -> Self
-            where {T: Clone}
+        #[inline]
+        allocator-api pub fn from_element_in(len: usize, element: T, alloc: A) -> Self
+            where T: Clone
         {
             // We use vec![] rather than Self::from_fn(len, |_| element.clone())
             // as it has specialization traits for manny things Such as zero initialization
@@ -861,8 +857,9 @@ impl_heap_array! {
         /// let x = HeapArray::from_slice_in(&s, System);
         /// // Here, `s` and `x` can be modified independently.
         /// ```
-        pub allocator-api fn from_slice_in(slice: &[T], alloc: A) -> HeapArray<T, A>
-            where {T: Clone}
+        #[inline]
+        allocator-api pub fn from_slice_in(slice: &[T], alloc: A) -> HeapArray<T, A>
+            where T: Clone
         {
             // HeapArray::from_fn_in(slice.len(), |i| {
             //     // Safety: from_fn provides values 0..len
@@ -887,7 +884,7 @@ impl_heap_array! {
         ///
         /// assert_eq!(HeapArray::from_array([1, 2, 3]), heap_array![1, 2, 3]);
         /// ```
-        pub allocator-api fn from_array_in<{const N: usize}>(array: [T; N], alloc: A) -> HeapArray<T, A> {
+        allocator-api pub fn from_array_in<const N: usize>(array: [T; N], alloc: A) -> HeapArray<T, A> {
             from_array_impl!(T, array, N, alloc)
         }
 
@@ -901,9 +898,8 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         #[inline(always)]
-        pub not(allocator-api) const fn new() -> Self {
-            #[cfg(not(feature = "allocator-api"))]
-            return HeapArray::from_raw_parts(NonNull::<T>::dangling(), 0);
+        not(allocator-api) pub const fn new() -> Self {
+            unsafe { HeapArray::from_raw_parts(NonNull::<T>::dangling(), 0) }
         }
 
         /// Creates a [`HeapArray`], where each element `T` is the returned value from `cb`
@@ -931,8 +927,8 @@ impl_heap_array! {
         /// assert_eq!(*bool_arr, [true, false, true, false, true]);
         /// ```
         /// [`HeapArray`]: HeapArray
-        #[inline(always)]
-        pub not(allocator-api) fn from_fn(len: usize, f: impl FnMut(usize) -> T) -> Self {
+        #[inline]
+        not(allocator-api) pub fn from_fn(len: usize, f: impl FnMut(usize) -> T) -> Self {
             HeapArray::try_from_fn(len, NeverShortCircuit::wrap_fn(f))
         }
 
@@ -967,10 +963,10 @@ impl_heap_array! {
         /// ```
         /// [`HeapArray`]: HeapArray
         /// [`from_fn`]: HeapArray::from_fn
-        pub not(allocator-api) fn try_from_fn<{R}>(len: usize, mut f: impl FnMut(usize) -> R) -> R::TryType<Self>
-            where {R: Try<Output=T>}
+        not(allocator-api) pub fn try_from_fn<R>(len: usize, mut f: impl FnMut(usize) -> R) -> R::TryType<Self>
+            where R: Try<Output=T>
         {
-            from_fn_impl!(T, R, len, f)
+            try_from_fn_impl!(T, R, len, f)
         }
 
         /// Create a [`HeapArray`] from a given element and size.
@@ -1000,8 +996,8 @@ impl_heap_array! {
         /// [`HeapArray`]: HeapArray
         /// [`heap_array`]: heap_array
         #[inline(always)]
-        pub not(allocator-api) fn from_element(len: usize, element: T) -> Self
-            where {T: Clone}
+        not(allocator-api) pub fn from_element(len: usize, element: T) -> Self
+            where T: Clone
         {
             // We use vec![] rather than Self::from_fn(len, |_| element.clone())
             // as it has specialization traits for manny things Such as zero initialization
@@ -1024,8 +1020,8 @@ impl_heap_array! {
         /// // Here, `s` and `x` can be modified independently.
         /// ```
         #[inline(always)]
-        pub not(allocator-api) fn from_slice(slice: &[T]) -> Self
-            where {T: Clone}
+        not(allocator-api) pub fn from_slice(slice: &[T]) -> Self
+            where T: Clone
         {
             // we use this for specialization on Copy T
             <[T]>::to_vec(slice).into()
@@ -1040,34 +1036,31 @@ impl_heap_array! {
         ///
         /// assert_eq!(HeapArray::from_array([1, 2, 3]), heap_array![1, 2, 3]);
         /// ```
-        #[inline(always)]
-        pub not(allocator-api) fn from_array<{const N: usize}>(array: [T; N]) -> Self {
+        not(allocator-api) pub fn from_array<const N: usize>(array: [T; N]) -> Self {
             from_array_impl!(T, array, N)
         }
 
-        raw-rest {
-            /// Safety: Caller must up hold
-            /// Must ensure the HeapArray wont be dropped afterwards
-            /// and that it wont be accessed later
-            #[inline]
-            pub(crate) unsafe fn drop_memory(&mut self) {
-                if self.len != 0 {
-                    // size is always less than isize::MAX we checked that already
-                    // By using Layout::array::<T> to allocate
-                    // but unchecked math is unstable
-                    // change when stable
-                    let size = mem::size_of::<T>() * self.len;
-                    let align = mem::align_of::<T>();
+        /// Safety: Caller must uphold
+        /// Must ensure the HeapArray won't be dropped afterward
+        /// and that it won't be accessed later
+        #[inline]
+        both pub(crate) unsafe fn drop_memory(&mut self) {
+            if self.len != 0 {
+                // size is always less than isize::MAX we checked that already
+                // By using Layout::array::<T> to allocate
+                // but unchecked math is unstable
+                // change when stable
+                let size = mem::size_of::<T>() * self.len;
+                let align = mem::align_of::<T>();
 
-                    let layout = Layout::from_size_align_unchecked(size, align);
-                    #[cfg(feature = "allocator-api")]
-                    self.alloc.deallocate(self.ptr.cast(), layout);
-                    #[cfg(not(feature = "allocator-api"))]
-                    alloc::alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
-                }
+                let layout = Layout::from_size_align_unchecked(size, align);
                 #[cfg(feature = "allocator-api")]
-                if mem::needs_drop::<A>() { unsafe { ManuallyDrop::drop(&mut self.alloc) } }
+                self.alloc.deallocate(self.ptr.cast(), layout);
+                #[cfg(not(feature = "allocator-api"))]
+                alloc::alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
             }
+            #[cfg(feature = "allocator-api")]
+            if mem::needs_drop::<A>() { unsafe { ManuallyDrop::drop(&mut self.alloc) } }
         }
     }
 }
@@ -1224,6 +1217,9 @@ impl<T> HeapArray<T, Global> {
     /// the raw pointer and length back is with the [`into_raw_parts`] function, granting you
     /// control of the allocation again.
     ///
+    /// # Safety:
+    /// must be given from [`into_raw_parts`]
+    ///
     /// # Examples
     ///
     /// ```
@@ -1244,7 +1240,7 @@ impl<T> HeapArray<T, Global> {
     /// [`into_raw_parts`]: HeapArray::into_raw_parts
     /// [`HeapArray`]: HeapArray
     #[inline(always)]
-    pub const fn from_raw_parts(ptr: NonNull<T>, len: usize) -> HeapArray<T> {
+    pub const unsafe fn from_raw_parts(ptr: NonNull<T>, len: usize) -> HeapArray<T> {
         HeapArray::<T, Global>::from_raw_parts_in(ptr, len, Global)
     }
 }
@@ -1264,6 +1260,23 @@ macro_rules! identical_impl {
         }
         #[cfg(feature = "allocator-api")]
         impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)? A: Allocator $(+ $($($alloc_restrict)*)+)?> $($Trait)+ for HeapArray<T, A> $(where $($restrict)*)? {
+            $($r#impl)*
+        }
+
+        identical_impl! { $($rest)* }
+    };
+    (
+        impl<$($time: lifetime, )?  T $(: {$($t_restrict:tt)+})?, $({$($generics:tt)*},)? Maybe<A $(: {$( $($alloc_restrict:tt)+ )&+})?>> {$($Trait:tt)+} for &$other_time:lifetime $(($mut:tt))? HeapArray<T, Maybe<A>> $(where {$($restrict:tt)*})? {
+            $($r#impl:tt)*
+        }
+        $($rest:tt)*
+    ) => {
+        #[cfg(not(feature = "allocator-api"))]
+        impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)?> $($Trait)+ for &$other_time $($mut)? HeapArray<T> $(where $($restrict)*)? {
+            $($r#impl)*
+        }
+        #[cfg(feature = "allocator-api")]
+        impl<$($time, )? T $(: $($t_restrict)+)?, $($($generics)*,)? A: Allocator $(+ $($($alloc_restrict)*)+)?> $($Trait)+ for &$other_time $($mut)? HeapArray<T, A> $(where $($restrict)*)? {
             $($r#impl)*
         }
 
@@ -1366,12 +1379,7 @@ impl<T, const N: usize> TryFrom<HeapArray<T>> for Box<[T; N]> {
         } else {
             let value = ManuallyDrop::new(value);
             let ptr = value.ptr;
-
-            // TODO: alloc-api
-            // // we never use alloc again, and it doesnt get dropped
-            // let alloc = unsafe { ptr::read(&*value.alloc) };
-
-            // SAFETY: we just checked if value.len != N
+            
             let ptr = ptr.as_ptr() as *mut [T; N];
             Ok(unsafe { Box::from_raw(ptr) })
         }
@@ -1399,19 +1407,15 @@ impl<T, A: Allocator> From<HeapArray<T, A>> for Vec<T, A> {
 }
 
 
-macro_rules! try_from_array_impl {
-    ($T: ty, $N: ident, $value: ident) => {{
-        if $N == 0 {
-            // Safety: N is 0
-            return Ok(unsafe { ptr::read(&[] as *const [T; $N]) })
-        }
-
-        if $value.len != N {
+macro_rules! try_to_array_impl {
+    ($T: ty, $N: expr, $value: ident) => {{
+        if $value.len != $N {
             return Err($value)
         }
 
         let mut value = ManuallyDrop::new($value);
-        let data: [T; $N] = unsafe { ptr::read(value.as_ptr() as *const [T; $N]) };
+        // valid ptr for at least $N values
+        let data: [$T; $N] = unsafe { ptr::read(value.as_ptr() as *const [$T; $N]) };
         // Safety: value is a ManuallyDrop and so it wont be dropped
         // and since we take ownership of value it wont be accessed after this
         unsafe { value.drop_memory() }
@@ -1425,7 +1429,7 @@ impl<T, A: Allocator, const N: usize> TryFrom<HeapArray<T, A>> for [T; N] {
     type Error = HeapArray<T, A>;
 
     fn try_from(value: HeapArray<T, A>) -> Result<[T; N], Self::Error> {
-        try_from_array_impl! (T, N, value)
+        try_to_array_impl! (T, N, value)
     }
 }
 
@@ -1434,7 +1438,7 @@ impl<T, const N: usize> TryFrom<HeapArray<T>> for [T; N] {
     type Error = HeapArray<T>;
 
     fn try_from(value: HeapArray<T>) -> Result<[T; N], Self::Error> {
-        try_from_array_impl! (T, N, value)
+        try_to_array_impl! (T, N, value)
     }
 }
 
@@ -1603,53 +1607,28 @@ impl<T> IntoIterator for HeapArray<T> {
     }
 }
 
-#[cfg(feature = "allocator-api")]
-#[allow(missing_docs)]
-impl<'a, T, A: Allocator> IntoIterator for &'a HeapArray<T, A> {
-    type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
+identical_impl! {
+    impl<'a, T, Maybe<A>> {IntoIterator} for &'a HeapArray<T, Maybe<A>> {
+        type Item = &'a T;
+        type IntoIter = Iter<'a, T>;
 
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
+        #[inline(always)]
+        fn into_iter(self) -> Self::IntoIter {
+            self.iter()
+        }
+    }
+
+    impl<'a, T, Maybe<A>> {IntoIterator} for &'a (mut) HeapArray<T, Maybe<A>> {
+        type Item = &'a mut T;
+        type IntoIter = IterMut<'a, T>;
+
+        #[inline(always)]
+        fn into_iter(self) -> Self::IntoIter {
+            self.iter_mut()
+        }
     }
 }
 
-#[cfg(not(feature = "allocator-api"))]
-#[allow(missing_docs)]
-impl<'a, T> IntoIterator for &'a HeapArray<T> {
-    type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-#[cfg(feature = "allocator-api")]
-#[allow(missing_docs)]
-impl<'a, T, A: Allocator> IntoIterator for &'a mut HeapArray<T, A> {
-    type Item = &'a mut T;
-    type IntoIter = IterMut<'a, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter_mut()
-    }
-}
-
-#[cfg(not(feature = "allocator-api"))]
-#[allow(missing_docs)]
-impl<'a, T> IntoIterator for &'a mut HeapArray<T> {
-    type Item = &'a mut T;
-    type IntoIter = IterMut<'a, T>;
-
-    #[inline(always)]
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter_mut()
-    }
-}
 
 #[allow(missing_docs)]
 #[doc(hidden)]
@@ -1662,10 +1641,6 @@ fn alloc_uninit<T, #[cfg(feature = "allocator-api")] A: Allocator>(
 {
     if len == 0 {
         return None
-    }
-
-    if mem::size_of::<T>() == 0 {
-        panic!("ZSTs NOT YET SUPPORTED")
     }
 
     #[cold]
@@ -1687,7 +1662,7 @@ fn alloc_uninit<T, #[cfg(feature = "allocator-api")] A: Allocator>(
     {
         Some(match A::allocate(alloc, layout) {
             // currently allocate returns a [u8] with the same size as the one requested
-            // and so we can safely discard its length
+            // and, so we can safely discard its length
             Ok(ptr) => NonNull::<[u8]>::cast::<MaybeUninit<T>>(ptr),
             Err(_) => handle_alloc_error(layout)
         })
@@ -1710,9 +1685,11 @@ use serde::{
 };
 
 #[cfg(feature = "serde")]
-impl<T: Serialize> Serialize for HeapArray<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        serializer.collect_seq(self)
+identical_impl! {
+    impl<T: {Serialize}, Maybe<A>> {Serialize} for HeapArray<T, Maybe<A>> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+            serializer.collect_seq(self)
+        }
     }
 }
 
@@ -1770,8 +1747,8 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for HeapArray<T> {
             { HeapArray::from_sequence(seq) }
         }
 
-        let visitor = HeapArrayVisitor::<T> {
-            marker: PhantomData,
+        let visitor = HeapArrayVisitor {
+            marker: PhantomData
         };
 
         deserializer.deserialize_seq(visitor)
@@ -1806,16 +1783,12 @@ identical_impl! {
 
 
 #[cfg(feature = "simd-json")]
-impl<'input, T: SimdDeserialize<'input>> SimdDeserialize<'input> for HeapArray<T>
-    where T: 'input
-{
+impl<'input, T: SimdDeserialize<'input> + 'input> SimdDeserialize<'input> for HeapArray<T> {
     fn from_tape(tape: &mut Tape<'input>) -> simd_json::Result<Self>  {
         if let Some(simd_json::Node::Array { len, .. }) = tape.next() {
             HeapArray::try_from_fn(len, |_| T::from_tape(tape))
         } else {
-            Err(simd_json::Error::generic(
-                simd_json::ErrorType::ExpectedArray,
-            ))
+            Err(simd_json::Error::generic(simd_json::ErrorType::ExpectedArray))
         }
     }
 }
