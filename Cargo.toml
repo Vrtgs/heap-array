@@ -1,6 +1,6 @@
 [package]
 name = "heap-array"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["NightMare-Vortex"]
 description = "An Implementation of a variable length array, with its main benefit over `Vec` is taking up less space"
@@ -20,5 +20,5 @@ allocator-api = []
 [dependencies]
 serde = { version = "1", optional = true, default-features = false, features=["alloc"] }
 simd-json-derive = { version = "0.13.0", optional = true }
-simd-json = { version = "0.13.9", optional = true }
+simd-json = { version = "0.13.10", optional = true }
 likely_stable = "0.1.2"

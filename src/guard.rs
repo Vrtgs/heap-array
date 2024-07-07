@@ -64,6 +64,9 @@ impl<T> Guard<T> {
 macro_rules! drop_impl {
     () => {
         fn drop(&mut self) {
+            // we shouldn't create a guard for 0 elements
+            unsafe { assume!(self.len != 0) };
+
             if mem::needs_drop::<T>() {
                 unsafe {
                     ptr::drop_in_place(ptr::slice_from_raw_parts_mut(
@@ -72,12 +75,11 @@ macro_rules! drop_impl {
                     ));
                 }
             }
-            unsafe { assume!(self.len != 0) };
+
+
             // size is always less than isize::MAX we checked that already
             // By using Layout::array::<T> to allocate
-
-            // But.. unchecked mul is unstable, update when stable
-            let size = mem::size_of::<T>() * self.len;
+            let size = unsafe { mem::size_of::<T>().unchecked_mul(self.len) };
             let align = mem::align_of::<T>();
 
             unsafe {

@@ -39,7 +39,7 @@ extern crate alloc;
 use core::{
     ptr::{self, NonNull},
     fmt::{Debug, Formatter},
-    mem::{self, ManuallyDrop, MaybeUninit, forget},
+    mem::{self, ManuallyDrop, MaybeUninit},
     ops::{Deref, DerefMut, ControlFlow},
     cmp::Ordering,
     slice::{Iter, IterMut},
@@ -62,8 +62,7 @@ use alloc::alloc::{Allocator, Global};
 use core::slice::SliceIndex;
 use core::ops::{Index, IndexMut};
 use core::hash::{Hash, Hasher};
-
-use likely_stable::{unlikely};
+use likely_stable::unlikely;
 use crate::guard::Guard;
 use crate::try_me::{NeverShortCircuit, Try};
 
@@ -227,7 +226,7 @@ macro_rules! from_array_impl {
             return unsafe { Self::from_raw_parts(NonNull::dangling(), $N) };
         }
         
-        let mut ptr: NonNull<MaybeUninit<$T>> = match alloc_uninit($N $(, &$alloc)?) {
+        let ptr: NonNull<MaybeUninit<$T>> = match alloc_uninit($N $(, &$alloc)?) {
             Some(ptr) => ptr,
             None => {
                 #[cfg(feature = "allocator-api")]
@@ -238,8 +237,8 @@ macro_rules! from_array_impl {
             }
         };
 
-        unsafe { ptr::copy_nonoverlapping($array.as_ptr(), ptr.as_mut().as_mut_ptr(), $N) }
-        forget($array);
+        let array = ManuallyDrop::new($array);
+        unsafe { ptr::copy_nonoverlapping(array.as_ptr(), ptr.as_ptr() as *mut $T, $N) }
 
         #[cfg(feature = "allocator-api")]
         return unsafe { Self::from_raw_parts_in(ptr.cast(), $N, $($alloc)?) };
@@ -448,6 +447,7 @@ impl_heap_array! {
         ///
         /// ```
         /// # use heap_array::heap_array;
+        /// # if cfg!(miri) { std::process::exit(0) } // miri doesn't like the leak
         /// let x = heap_array![1, 2, 3];
         /// let static_ref: &'static mut [usize] = x.leak();
         /// static_ref[0] += 1;
@@ -474,6 +474,7 @@ impl_heap_array! {
         ///
         /// ```
         /// # use heap_array::heap_array;
+        /// # if cfg!(miri) { std::process::exit(0) } // miri doesn't like the leak
         /// let x = heap_array![1, 2, 3];
         /// let static_ref: &'static mut [usize] = x.leak();
         /// static_ref[0] += 1;
@@ -1001,7 +1002,7 @@ impl_heap_array! {
         {
             // We use vec![] rather than Self::from_fn(len, |_| element.clone())
             // as it has specialization traits for manny things Such as zero initialization
-            // as well as avoid an extra copy (caused by not using element except for cloning)
+            // as well as avoid an extra clone (caused by not using element except for cloning)
             vec::from_elem(element, len).into()
         }
 
@@ -1048,9 +1049,7 @@ impl_heap_array! {
             if self.len != 0 {
                 // size is always less than isize::MAX we checked that already
                 // By using Layout::array::<T> to allocate
-                // but unchecked math is unstable
-                // change when stable
-                let size = mem::size_of::<T>() * self.len;
+                let size = mem::size_of::<T>().unchecked_mul(self.len);
                 let align = mem::align_of::<T>();
 
                 let layout = Layout::from_size_align_unchecked(size, align);
